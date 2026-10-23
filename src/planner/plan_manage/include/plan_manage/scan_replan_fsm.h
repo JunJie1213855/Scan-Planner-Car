@@ -16,6 +16,7 @@
 #include <plan_env/grid_map.h>
 #include <scan_planner_msgs/msg/bspline.hpp>
 #include <scan_planner_msgs/msg/data_disp.hpp>
+#include <scan_planner_msgs/msg/execution_progress.hpp>
 #include <plan_manage/planner_manager.h>
 #include <traj_utils/planning_visualization.h>
 
@@ -52,6 +53,12 @@ namespace scan_planner
     scan_planner_msgs::msg::DataDisp data_disp_; // 数据展示
 
     // 参数
+    bool use_controller_progress_{false};
+    int64_t controller_progress_id_{-1};
+    double controller_progress_time_{0.0};
+    rclcpp::Time controller_feedback_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Subscription<scan_planner_msgs::msg::ExecutionProgress>::SharedPtr controller_progress_sub_;
+    void controllerProgressCallback(const scan_planner_msgs::msg::ExecutionProgress::ConstSharedPtr &msg);
     int navi_mode_; // 1 manual select, 2 hard code
     double no_replan_thresh_, replan_thresh_;
     std::vector<Eigen::Vector3d> preset_waypoints_;

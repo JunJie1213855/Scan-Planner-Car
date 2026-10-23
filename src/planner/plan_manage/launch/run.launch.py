@@ -28,8 +28,8 @@ def _setup(context):
     navi_mode = int(LaunchConfiguration("navi_mode").perform(context))
     if sensor_type not in ("lidar", "depth"):
         raise RuntimeError("sensor_type must be 'lidar' or 'depth'")
-    if controller_mode not in ("open_loop", "closed_loop"):
-        raise RuntimeError("controller_mode must be 'open_loop' or 'closed_loop'")
+    if controller_mode not in ("open_loop", "closed_loop", "closed_loop_car"):
+        raise RuntimeError("controller_mode must be 'open_loop', 'closed_loop', or 'closed_loop_car'")
     if navi_mode not in (1, 2, 3):
         raise RuntimeError("navi_mode must be 1, 2, or 3")
     if navi_mode == 2 and (not keypoints_file or not os.path.isfile(keypoints_file)):
@@ -77,6 +77,7 @@ def _setup(context):
         **common,
         **intrinsics,
         "fsm.navi_mode": navi_mode,
+        "fsm.use_controller_progress": controller_mode == "closed_loop_car",
         "grid_map.sensor_type": sensor_type,
         "grid_map.cloud_is_world": cloud_is_world,
         "grid_map.need_extrinsic": need_extrinsic,
@@ -135,13 +136,20 @@ def _setup(context):
             )
         )
     else:
+        controller_name = (
+            "closed_loop_controller_car" if controller_mode == "closed_loop_car"
+            else "closed_loop_controller"
+        )
+        controller_overrides = dict(common)
+        if controller_mode == "closed_loop_car":
+            controller_overrides["odom_frame"] = LaunchConfiguration("car_odom_frame").perform(context)
         actions.append(
             Node(
                 package="scan_planner",
-                executable="closed_loop_controller",
-                name="closed_loop_controller",
+                executable=controller_name,
+                name=controller_name,
                 output="screen",
-                parameters=[controllers_yaml, common],
+                parameters=[controllers_yaml, controller_overrides],
                 remappings=[
                     ("body_pose", body_pose),
                     ("cmd_vel", "/cmd_vel" if is_real else "/quad_0/cmd_vel"),
@@ -162,6 +170,7 @@ def _setup(context):
                             "init_x": init_x,
                             "init_y": init_y,
                             "init_z": init_z,
+                            **({"max_vy": 0.0} if controller_mode == "closed_loop_car" else {}),
                             "publish_tf": False,
                         },
                     ],
@@ -229,6 +238,7 @@ def generate_launch_description():
             DeclareLaunchArgument("navi_mode", default_value="1"),
             DeclareLaunchArgument("sensor_type", default_value="lidar"),
             DeclareLaunchArgument("controller_mode", default_value="closed_loop"),
+            DeclareLaunchArgument("car_odom_frame", default_value="world"),
             DeclareLaunchArgument("keypoints_file", default_value=""),
             DeclareLaunchArgument("reference_path_file", default_value=""),
             DeclareLaunchArgument("use_gpu", default_value="false"),

@@ -98,7 +98,17 @@ RViz2 配置已适配 ROS 2 Humble：Go2 的 RobotModel 使用现有的 `meshes/
 - `navi_mode:=2`：按照 ROS 2 参数文件中预设的 `fsm.waypoints` 路径点序列导航
 - `navi_mode:=3`：订阅 `initial_path` 话题获取全局路径，并在局部范围内进行避障
 
-控制器模式分为 `open_loop`（开环）和 `closed_loop`（闭环）两种。本次移植保留的核心启动参数包括：`is_real_world`、`navi_mode`、`sensor_type`、`controller_mode`、`use_gpu`、`use_pcd_map` 和 `pcd_map_file`。
+控制器模式包括 `open_loop`（开环）、`closed_loop`（原闭环）和 `closed_loop_car`（差速小车闭环）。
+
+差速小车使用空间 Pure Pursuit，仅输出前向速度和偏航角速度，并反馈实际路径进度。仿真启动：
+
+```bash
+ros2 launch scan_planner run.launch.py controller_mode:=closed_loop_car
+```
+
+`car_odom_frame` 必须与里程计消息的 `header.frame_id` 一致，默认 `world`；若实机里程计使用 `odom`，追加 `car_odom_frame:=odom`。使用仿真时钟时追加 `use_sim_time:=true`。控制器参数在 `controllers.yaml` 的 `closed_loop_controller_car` 节点下。新模式自动启用 `fsm.use_controller_progress`，原模式保持原有行为。
+
+本次移植保留的核心启动参数包括：`is_real_world`、`navi_mode`、`sensor_type`、`controller_mode`、`use_gpu`、`use_pcd_map` 和 `pcd_map_file`。
 
 与原作者实现保持一致，`closed_loop` 通过平面 `cmd_vel` 跟踪 `x/y/yaw`，
 适用于二维仿真或真机底盘接口；多楼层仿真应使用 `open_loop`，直接按规划得到的

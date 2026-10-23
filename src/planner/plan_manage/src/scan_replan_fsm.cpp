@@ -42,6 +42,11 @@ namespace scan_planner
     emergency_time_ = load_parameter<double>(node_, "fsm.emergency_time", 1.0);
     enable_fail_safe_ = load_parameter<bool>(node_, "fsm.fail_safe", true);
     max_replan_fail_count_ = load_parameter<int>(node_, "fsm.max_replan_fail_count", 1000);
+    use_controller_progress_ = load_parameter<bool>(node_, "fsm.use_controller_progress", false);
+    if (use_controller_progress_)
+      controller_progress_sub_ = node_->create_subscription<scan_planner_msgs::msg::ExecutionProgress>(
+          "planning/execution_progress", 10,
+          std::bind(&SCANReplanFSM::controllerProgressCallback, this, std::placeholders::_1));
     self_inflation_z_up_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_up", 0.0);
     self_inflation_z_down_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_down", 0.0);
     self_double_cylinder_radius_ = load_parameter<double>(node_, "grid_map.double_cylinder_radius", 0.0);
@@ -397,11 +402,15 @@ namespace scan_planner
   {
     odom_pos_(0) = msg->pose.pose.position.x;
     odom_pos_(1) = msg->pose.pose.position.y;
-    odom_pos_(2) = msg->pose.pose.position.z;
+    // 注意这里，原始的 scan planner 使用的是里程计的高度作为A*规划平面，但是小车高度回过低，但是地面膨胀后全是障碍物
+    // odom_pos_(2) = msg->pose.pose.position.z;
+    // 我们主动提升里程计高度 0.25 大概
+    odom_pos_(2) = msg->pose.pose.position.z + 0.25;
 
     // 如果是手动给航点
     if (navi_mode_ == NAVI_MODE::MANUAL_TARGET && !rviz_height_ready_)
     {
+      // !!! 注意 !!! 小车这里要提升自己的高度，防止膨胀体素的碰撞
       rviz_goal_height_ = odom_pos_(2);
       rviz_height_ready_ = true;
       RCLCPP_INFO(node_->get_logger(), "Set RViz goal height from initial body_pose z: %.3f", rviz_goal_height_);
@@ -433,6 +442,30 @@ namespace scan_planner
     go2_execution_frozen_ = msg->data;
   }
 
+  void SCANReplanFSM::controllerProgressCallback(
+      const scan_planner_msgs::msg::ExecutionProgress::ConstSharedPtr &msg)
+  {
+    auto &info = planner_manager_->local_data_;
+    const double age = (node_->now() - rclcpp::Time(msg->header.stamp,
+                            node_->get_clock()->get_clock_type())).seconds();
+    if (!use_controller_progress_ || msg->traj_id != info.traj_id_ ||
+        !std::isfinite(msg->time_from_start) || msg->time_from_start < 0.0 ||
+        msg->time_from_start > info.duration_ + 1e-3 || age < -0.1 || age > 0.5)
+      return;
+    controller_progress_id_ = msg->traj_id;
+    controller_feedback_time_ = node_->now();
+    // Projection can reach the last path sample while the car is still beside it.
+    const double end_margin = std::min(0.02, info.duration_ * 0.1);
+    controller_progress_time_ = msg->reached_end ? info.duration_ :
+        std::min(msg->time_from_start, info.duration_ - end_margin);
+    if (msg->tracking_lost && exec_state_ == EXEC_TRAJ)
+    {
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                           "Car tracking deviation requests replanning from odometry");
+      changeFSMExecState(REPLAN_TRAJ, "CAR_TRACKING");
+    }
+  }
+
   void SCANReplanFSM::updateLocalTrajTimeFreeze()
   {
     const rclcpp::Time now = node_->now();
@@ -443,6 +476,15 @@ namespace scan_planner
       return;
 
     LocalTrajData *info = &planner_manager_->local_data_;
+    if (use_controller_progress_ && info->start_time_.seconds() > 1e-5)
+    {
+      const double age = (now - controller_feedback_time_).seconds();
+      if (controller_progress_id_ == info->traj_id_ && age >= 0.0 && age <= 0.5)
+        info->start_time_ = now - rclcpp::Duration::from_seconds(controller_progress_time_);
+      else
+        info->start_time_ += rclcpp::Duration::from_seconds(dt);
+      return;
+    }
     if (go2_execution_frozen_ && info->start_time_.seconds() > 1e-5)
       info->start_time_ += rclcpp::Duration::from_seconds(dt);
   }

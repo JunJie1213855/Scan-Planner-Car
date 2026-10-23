@@ -37,7 +37,7 @@ target_include_directories(scan_planner_node PRIVATE include)
 ament_target_dependencies(scan_planner_node ${scan_planner_dependencies})
 target_link_libraries(scan_planner_node Eigen3::Eigen)
 
-foreach(target open_loop_controller closed_loop_controller go2_kinematic_sim go2_gait_publisher)
+foreach(target open_loop_controller closed_loop_controller closed_loop_controller_car go2_kinematic_sim go2_gait_publisher)
   add_executable(${target} src/${target}.cpp)
   target_include_directories(${target} PRIVATE include)
   ament_target_dependencies(${target}
@@ -47,7 +47,7 @@ foreach(target open_loop_controller closed_loop_controller go2_kinematic_sim go2
 endforeach()
 
 install(TARGETS
-  scan_planner_node open_loop_controller closed_loop_controller
+  scan_planner_node open_loop_controller closed_loop_controller closed_loop_controller_car
   go2_kinematic_sim go2_gait_publisher
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
@@ -62,6 +62,10 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
   find_package(launch_testing_ament_cmake REQUIRED)
+  ament_add_gtest(test_car_path_tracker test/test_car_path_tracker.cpp)
+  target_include_directories(test_car_path_tracker PRIVATE include)
+  target_link_libraries(test_car_path_tracker Eigen3::Eigen)
+  add_launch_test(test/test_car_controller.py TIMEOUT 90)
   ament_add_gtest(test_reference_path_utils test/test_reference_path_utils.cpp)
   target_include_directories(test_reference_path_utils PRIVATE include)
   ament_target_dependencies(test_reference_path_utils nav_msgs)
