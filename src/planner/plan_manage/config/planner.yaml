@@ -3,6 +3,7 @@ scan_planner_node:
     use_sim_time: false # 仿真时为 true，实机为 false
 
     fsm.navi_mode: 1
+    fsm.odom_height_offset: 0.25 # 规划参考高度 = 里程计 z + 此偏移，单位 m；无需偏移时设为 0.0
     fsm.thresh_replan: 1.0
     fsm.thresh_no_replan: 0.1
     fsm.planning_horizon: 3.5

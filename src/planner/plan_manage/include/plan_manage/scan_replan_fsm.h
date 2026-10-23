@@ -69,6 +69,7 @@ namespace scan_planner
     double self_inflation_z_up_, self_inflation_z_down_;
     double self_double_cylinder_radius_, self_double_cylinder_offset_;
     double body_height_;
+    double odom_height_offset_{0.25}; // 里程计到规划参考点的 Z 偏移，单位 m
     std::string self_inflation_frame_id_;
 
     // 规划数据

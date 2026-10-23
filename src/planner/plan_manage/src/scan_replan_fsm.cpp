@@ -52,6 +52,9 @@ namespace scan_planner
     self_double_cylinder_radius_ = load_parameter<double>(node_, "grid_map.double_cylinder_radius", 0.0);
     self_double_cylinder_offset_ = load_parameter<double>(node_, "grid_map.double_cylinder_offset", 0.0);
     body_height_ = load_parameter<double>(node_, "grid_map.body_height", 0.0);
+    odom_height_offset_ = load_parameter<double>(node_, "fsm.odom_height_offset", 0.25);
+    if (!std::isfinite(odom_height_offset_))
+      throw std::invalid_argument("fsm.odom_height_offset must be finite");
     self_inflation_frame_id_ = load_parameter<std::string>(node_, "grid_map.frame_id", "world");
 
     // 导航模式为 2.预设航点模式
@@ -402,15 +405,13 @@ namespace scan_planner
   {
     odom_pos_(0) = msg->pose.pose.position.x;
     odom_pos_(1) = msg->pose.pose.position.y;
-    // 注意这里，原始的 scan planner 使用的是里程计的高度作为A*规划平面，但是小车高度回过低，但是地面膨胀后全是障碍物
-    // odom_pos_(2) = msg->pose.pose.position.z;
-    // 我们主动提升里程计高度 0.25 大概
-    odom_pos_(2) = msg->pose.pose.position.z + 0.25;
+    // 将里程计原点转换为规划参考点；偏移沿地图 Z 轴，单位 m。
+    odom_pos_(2) = msg->pose.pose.position.z + odom_height_offset_;
 
     // 如果是手动给航点
     if (navi_mode_ == NAVI_MODE::MANUAL_TARGET && !rviz_height_ready_)
     {
-      // !!! 注意 !!! 小车这里要提升自己的高度，防止膨胀体素的碰撞
+      // 手动目标沿用首次里程计的规划参考高度（含偏移）。
       rviz_goal_height_ = odom_pos_(2);
       rviz_height_ready_ = true;
       RCLCPP_INFO(node_->get_logger(), "Set RViz goal height from initial body_pose z: %.3f", rviz_goal_height_);
