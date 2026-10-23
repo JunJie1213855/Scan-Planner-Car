@@ -100,14 +100,6 @@ RViz2 配置已适配 ROS 2 Humble：Go2 的 RobotModel 使用现有的 `meshes/
 
 控制器模式包括 `open_loop`（开环）、`closed_loop`（原闭环）和 `closed_loop_car`（差速小车闭环）。
 
-差速小车使用空间 Pure Pursuit，仅输出前向速度和偏航角速度，并反馈实际路径进度。仿真启动：
-
-```bash
-ros2 launch scan_planner run.launch.py controller_mode:=closed_loop_car
-```
-
-`car_odom_frame` 必须与里程计消息的 `header.frame_id` 一致，默认 `world`；若实机里程计使用 `odom`，追加 `car_odom_frame:=odom`。使用仿真时钟时追加 `use_sim_time:=true`。控制器参数在 `controllers.yaml` 的 `closed_loop_controller_car` 节点下。新模式自动启用 `fsm.use_controller_progress`，原模式保持原有行为。
-
 本次移植保留的核心启动参数包括：`is_real_world`、`navi_mode`、`sensor_type`、`controller_mode`、`use_gpu`、`use_pcd_map` 和 `pcd_map_file`。
 
 与原作者实现保持一致，`closed_loop` 通过平面 `cmd_vel` 跟踪 `x/y/yaw`，
@@ -129,6 +121,75 @@ ros2 launch scan_planner run.launch.py \
 
 实际硬件部署时，激光惯导里程计（LIO）、相机和宇树（Unitree）驱动均为外部依赖，默认启动会将规划器输入映射到 `/LIO/odom_vehicle`、`/LIO/odom_imu`、`/LIO/clouds_lidar` 话题以及 RealSense 对齐深度图话题，可根据实际安装的驱动栈修改话题重映射配置。
 
+## 地面差速小车适配
+
+在 ROS 2 移植基础上，本分支增加了差速小车专用控制器、实际路径进度反馈，以及可配置的规划参考高度偏移。地面小车可以使用原有 B-spline 规划结果进行平面闭环跟踪。
+
+### 差速小车控制器
+
+新增 `closed_loop_controller_car` 节点，使用空间 Pure Pursuit 跟踪 B-spline 路径，仅输出 `cmd_vel.linear.x` 和 `cmd_vel.angular.z`，侧向速度保持为零。控制器支持转弯限速、加减速限制、朝向误差较大时先原地转向，以及到达终点后停车；里程计超时、轨迹无效或跟踪偏差超限时停止输出运动指令。
+
+在已构建并加载工作空间的终端中，启动二维仿真：
+
+```bash
+source install/setup.bash
+ros2 launch scan_planner run.launch.py \
+  is_real_world:=false navi_mode:=1 sensor_type:=lidar \
+  controller_mode:=closed_loop_car car_odom_frame:=world
+```
+
+已有实机里程计和感知输入时，可使用：
+
+```bash
+ros2 launch scan_planner run.launch.py \
+  is_real_world:=true navi_mode:=1 sensor_type:=lidar \
+  controller_mode:=closed_loop_car car_odom_frame:=odom
+```
+
+`car_odom_frame` 必须与输入里程计的 `header.frame_id` 一致，以上实机示例假定为 `odom`。启动入口默认传入 `world`，覆盖控制器配置文件中的 `odom_frame: odom`。这个参数只用于检查坐标系名称，不执行坐标变换；轨迹和里程计的位置必须使用一致的坐标系。使用 `/clock` 仿真时钟时追加 `use_sim_time:=true`。
+
+控制参数位于 `src/planner/plan_manage/config/controllers.yaml` 的 `closed_loop_controller_car.ros__parameters` 下：
+
+| 参数 | 默认值 | 作用 |
+|---|---|---|
+| `max_vx` / `max_vyaw` | `0.5 m/s` / `1.0 rad/s` | 前向速度和偏航角速度上限 |
+| `max_accel` / `max_decel` | `0.5` / `0.8 m/s²` | 前向加速和减速限制 |
+| `lookahead_min` / `lookahead_max` | `0.25` / `0.6 m` | Pure Pursuit 前视距离范围 |
+| `rotate_enter` / `rotate_exit` | `0.7` / `0.25 rad` | 原地转向的进入和退出阈值 |
+| `finish_dist` | `0.1 m` | 终点距离容差 |
+| `max_tracking_error` | `0.8 m` | 跟踪偏差上限 |
+| `odom_timeout` | `0.5 s` | 里程计超时时间 |
+
+控制器通过 `planning/execution_progress` 发布 `scan_planner_msgs/msg/ExecutionProgress`，包含轨迹编号、实际路径进度、终点状态和跟踪丢失状态。选择 `closed_loop_car` 时，启动入口自动启用 `fsm.use_controller_progress`，规划状态机按反馈更新轨迹执行时间；原地转向或反馈中断时不再单纯按墙钟推进轨迹，跟踪丢失时请求重规划。单独启动规划器和小车控制器时，需自行给规划器设置 `fsm.use_controller_progress: true`。
+
+原有 `open_loop` 和 `closed_loop` 模式仍可使用。差速控制器按 XY 平面跟踪，不控制 Z；自带二维运动学仿真也不会模拟小车爬坡或跨层运动。
+
+### 规划参考高度偏移
+
+地面小车的里程计原点可能位于地面附近，直接作为规划参考点时，可能落入地面占据栅格或其膨胀区域。新增 `fsm.odom_height_offset` 参数，替代原先硬编码的 `0.25 m` 偏移：
+
+```text
+规划参考高度 = 输入里程计 z + fsm.odom_height_offset
+```
+
+在 `src/planner/plan_manage/config/planner.yaml` 中配置：
+
+```yaml
+scan_planner_node:
+  ros__parameters:
+    fsm.odom_height_offset: 0.25 # 单位 m；无需偏移时设为 0.0
+```
+
+该偏移沿地图 Z 轴应用于规划器内部位置，影响轨迹起点、碰撞查询和自膨胀显示；不修改原始里程计、点云或地图，也不会让小车实际升高。参数在启动时读取，要求为有限数值；修改配置后重新启动规划器生效。若里程计原点已经位于合适的机体参考高度，应设为 `0.0`，避免重复抬高。例如输入 `z=0.0 m`、偏移 `0.25 m` 时，规划参考高度为 `0.25 m`；输入已为 `z=0.25 m` 时，相同偏移会得到 `0.50 m`。
+
+目标高度需与这个参考点一致：
+
+- `navi_mode:=1`：手动目标使用首次收到的里程计高度加偏移后的值，并在后续保持该高度。
+- `navi_mode:=2`：预设航点使用 `fsm.waypoints` 中给定的 Z，不会自动叠加里程计高度偏移。
+- `navi_mode:=3`：参考路径高度按“输入路径 Z + `grid_map.body_height`”处理；需与里程计加偏移后的参考高度对应。
+
+`fsm.odom_height_offset` 与 `grid_map.body_height` 分别处理里程计和参考路径，不能直接视为同一个参数；应根据各自输入的高度含义配置。偏移量还应结合小车实际尺寸、地图分辨率和垂直膨胀参数选择。
+
 ## 配置与接口
 
 规划器、控制器和仿真器的参数分别位于：
@@ -145,7 +206,7 @@ scan_planner_node:
     fsm.waypoints: [0.0, 0.0, 0.3, 5.0, 1.0, 0.3]
 ```
 
-自定义消息类型为 `scan_planner_msgs/msg/Bspline` 和 `scan_planner_msgs/msg/DataDisp`。规划器相关话题均为相对话题，支持重映射，核心输出话题包括 `planning/bspline`、`planning/data_display` 和 `planning/go2_execution_frozen`。
+自定义消息类型包括 `scan_planner_msgs/msg/Bspline`、`scan_planner_msgs/msg/DataDisp` 和差速小车执行反馈 `scan_planner_msgs/msg/ExecutionProgress`。规划器相关话题均为相对话题，支持重映射，核心输出话题包括 `planning/bspline`、`planning/data_display` 和 `planning/go2_execution_frozen`。
 
 关键点记录器现在是原生的 `rclpy` 可执行程序：
 
